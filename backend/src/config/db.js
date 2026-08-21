@@ -34,7 +34,31 @@ export async function connectDB() {
   });
 
   isConnected = true;
+  await cleanupStaleIndexes();
   return mongoose.connection;
+}
+
+/**
+ * Drops indexes left over from earlier schema versions that no longer match
+ * the current models. Mongoose never drops old indexes on its own when a
+ * schema's fields change, so a stale unique index can keep enforcing
+ * constraints on fields that don't exist anymore (e.g. every new document
+ * colliding on `token: null` after the field was renamed to `tokenHash`).
+ * Safe to run on every boot — it's a no-op once the index is gone.
+ */
+async function cleanupStaleIndexes() {
+  try {
+    let collections = await mongoose.connection.db.listCollections({ name: "passwordresettokens" }).toArray();
+    if (collections.length === 0) return;
+    let indexes = await mongoose.connection.db.collection("passwordresettokens").indexes();
+    let stale = indexes.find((idx) => idx.name === "token_1");
+    if (stale) {
+      await mongoose.connection.db.collection("passwordresettokens").dropIndex("token_1");
+      logger.info("[mongo] dropped stale passwordresettokens.token_1 index");
+    }
+  } catch (err) {
+    logger.warn({ err }, "[mongo] could not check/drop stale indexes");
+  }
 }
 
 export async function disconnectDB() {
